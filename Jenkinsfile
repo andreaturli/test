@@ -1,54 +1,44 @@
+// see https://dzone.com/refcardz/continuous-delivery-with-jenkins-workflow for tutorial
+// see https://documentation.cloudbees.com/docs/cookbook/_pipeline_dsl_keywords.html for dsl reference
+// This Jenkinsfile should simulate a minimal Jenkins pipeline and can serve as a starting point.
+// NOTE: sleep commands are solelely inserted for the purpose of simulating long running tasks when you run the pipeline
 node {
-    step([$class: 'GitHubSetCommitStatusBuilder'])
+   // Mark the code checkout 'stage'....
+   stage 'checkout'
 
-    // Checkout code
-    stage 'Checkout'
-    checkout scm
-    def pom = readMavenPom()
-    def projectName = pom.name
-    def projectVersion = pom.version
+   // Get some code from a GitHub repository
+   git url: 'https://github.com/kesselborn/jenkinsfile'
+   sh 'git clean -fdx; sleep 4;'
 
-    // Build & test
-    stage 'Build'
-    try {
-        echo "Building ${projectName} - ${projectVersion}"
-        mvn "-Dmaven.test.failure.ignore clean verify"
-        step([$class: 'ArtifactArchiver', artifacts: '**/target/*.jar', fingerprint: true])
-        step([$class: 'JUnitResultArchiver', testResults: '**/target/surefire-reports/*.xml'])
-        step([$class: 'FindBugsPublisher', pattern: '**/findbugsXml.xml'])
-        currentBuild.result = 'SUCCESS'
-    } catch (Exception err) {
-        currentBuild.result = 'FAILURE'
-    }
+   // Get the maven tool.
+   // ** NOTE: This 'mvn' maven tool must be configured
+   // **       in the global configuration.
+   def mvnHome = tool 'mvn'
 
-    // Notifications
-    stage 'Notify'
-    step([$class: 'GitHubCommitNotifier', resultOnFailure: 'FAILURE'])
-    def color = 'GREEN'
-    if (!isOK()) {
-        color = 'RED'
-    }
-    hipchatSend color: "${color}",
-        message: "${projectName} - ${projectVersion} @ ${env.BRANCH_NAME} <a href='${env.BUILD_URL}'>#${env.BUILD_NUMBER}</a> status: ${currentBuild.result}",
-        room: 'support-room'
+   stage 'build'
+   // set the version of the build artifact to the Jenkins BUILD_NUMBER so you can
+   // map artifacts to Jenkins builds
+   sh "${mvnHome}/bin/mvn versions:set -DnewVersion=${env.BUILD_NUMBER}"
+   sh "${mvnHome}/bin/mvn package"
+
+   stage 'test'
+   parallel 'test': {
+     sh "${mvnHome}/bin/mvn test; sleep 2;"
+   }, 'verify': {
+     sh "${mvnHome}/bin/mvn verify; sleep 3"
+   }
+
+   stage 'archive'
+   archive 'target/*.jar'
 }
 
-// Utility functions
 
-def mvn(String goals) {
-    def mvnHome = tool "maven-3.3.9"
-    def javaHome = tool "oracle-8u74"
+node {
+   stage 'deploy Canary'
+   sh 'echo "write your deploy code here"; sleep 5;'
 
-    withEnv(["JAVA_HOME=${javaHome}", "PATH+MAVEN=${mvnHome}/bin"]) {
-        wrap([$class: 'ConfigFileBuildWrapper', managedFiles: [
-            [fileId: 'org.jenkinsci.plugins.configfiles.maven.MavenSettingsConfig1446135612420', targetLocation: "settings.xml", variable: '']
-        ]]) {
-            sh "mvn -s settings.xml -B ${goals}"
-        }
-    }
-}
-
-@com.cloudbees.groovy.cps.NonCPS
-def isOK() {
-    return "SUCCESS".equals(currentBuild.result)
+   stage 'deploy Production'
+   input 'Proceed?'
+   sh 'echo "write your deploy code here"; sleep 6;'
+   archive 'target/*.jar'
 }
